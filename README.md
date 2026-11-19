@@ -13,7 +13,9 @@ A scientific claim and citation review workspace built with React, TypeScript, V
 
 ## Data and privacy
 
-The initial manuscript and source excerpts are illustrative demonstration data, not a live literature search. Imported files are processed in the browser. Extracted candidate claims remain unverified until the reviewer supplies a source and records a judgment; no external AI service is called. Workspace data is saved in local storage. Export the report before replacing the current manuscript.
+The initial manuscript, source records, confidence values, and assessment labels are illustrative demonstration data. They are not independent verification results, and no live academic literature search or AI service is connected. Uploaded files are processed locally in the browser. Extracted candidate passages remain unverified until a reviewer supplies source evidence and records a judgment. PDF locations refer to source PDF pages; TXT and Markdown locations are generated passage groups. Scanned PDFs need OCR before upload. PDFs over 150 pages are not processed.
+
+Workspace data is saved in this browser's local storage. Opening another paper replaces the current report and its review activity; export a copy first if you need to keep it.
 
 ## Build and validate
 

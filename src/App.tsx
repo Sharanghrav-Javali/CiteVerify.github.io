@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownToLine, ArrowUpFromLine, BookOpen, Check, CheckCheck, ChevronDown, CircleCheck, CloudCheck, Code2, FileJson, FileText, Flag, Keyboard, Layers3, LoaderCircle, ScanLine, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserRound, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, BookOpen, Check, CheckCheck, ChevronDown, CircleCheck, CloudCheck, Code2, FileJson, FileText, Flag, Info, Keyboard, Layers3, LoaderCircle, ScanLine, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserRound, X } from 'lucide-react'
 import { Logo, MetricCard, Modal } from './components/UI'
 import { DocumentReader } from './components/DocumentReader'
 import { EvidenceInspector } from './components/EvidenceInspector'
@@ -11,6 +11,14 @@ import './App.css'
 type Dialog = 'upload' | 'note' | 'override' | 'compare' | 'profile' | 'shortcuts' | 'workflow' | 'source' | null
 const filters: ClaimFilter[] = ['all', 'supported', 'partly', 'unsupported', 'contradictory', 'outdated']
 const steps = ['Upload', 'Extract', 'Retrieve', 'Compare', 'Report']
+
+function getWorkflowStage(report: Report, reviews: Record<number, Review>) {
+  if (report.kind === 'sample') return 4
+  const reviewed = report.claims.some(claim => Boolean(reviews[claim.id]?.decision))
+  if (reviewed) return 4
+  const hasSources = report.claims.some(claim => Boolean(reviews[claim.id]?.source ?? claim.source))
+  return hasSources ? 3 : 2
+}
 
 function App() {
   const [initial] = useState(loadWorkspace)
@@ -26,7 +34,7 @@ function App() {
   const [mobilePane, setMobilePane] = useState<'document' | 'evidence'>('document')
   const [dialog, setDialog] = useState<Dialog>(null)
   const [menu, setMenu] = useState<'export' | 'profile' | null>(null)
-  const [workflowStep, setWorkflowStep] = useState(4)
+  const [workflowStep, setWorkflowStep] = useState(initial.report.kind === 'sample' ? 4 : 2)
   const [exporting, setExporting] = useState(false)
   const [toast, setToast] = useState('')
   const [saved, setSaved] = useState(true)
@@ -35,7 +43,11 @@ function App() {
   const counts = useMemo(() => getDistribution(report.claims, reviews), [report.claims, reviews])
   const visibleClaims = useMemo(() => report.claims.filter(c => matchesClaim(c, reviews[c.id], filter, query)), [report.claims, reviews, filter, query])
   const selected = visibleClaims.find(c => c.id === selectedId) ?? visibleClaims[0] ?? report.claims[0]
-  const currentReview = reviews[selected.id]
+  const currentReview = selected ? reviews[selected.id] : undefined
+  const workflowStage = getWorkflowStage(report, reviews)
+  const reviewedCount = report.claims.filter(claim => Boolean(reviews[claim.id]?.decision)).length
+  const workspaceLabel = report.kind === 'sample' ? 'Illustrative sample' : reviewedCount === report.claims.length && reviewedCount > 0 ? 'All reviewed · local' : reviewedCount ? `${reviewedCount} reviewed · local` : 'Unverified · local'
+  const workspaceStateClass = report.kind === 'sample' ? 'sample' : reviewedCount === report.claims.length && reviewedCount > 0 ? 'reviewed' : 'pending'
   const activeFilters: ClaimFilter[] = [...filters, ...(counts.unverified > 0 ? ['unverified' as const] : []), ...(filter === 'flagged' || filter === 'needs-review' ? [filter] : [])]
 
   useEffect(() => {
@@ -93,10 +105,11 @@ function App() {
   }
   function replaceReport(next: Report) {
     setReport(next); setReviews({}); setSelectedId(next.kind === 'sample' ? 4 : 1)
-    setPage(1); setFilter('all'); setQuery(''); setReaderTab('document'); setDialog(null); setMobilePane('document')
+    setPage(1); setFilter('all'); setQuery(''); setReaderTab('document'); setDialog(null); setMobilePane('document'); setWorkflowStep(next.kind === 'sample' ? 4 : 2)
     setToast(next.kind === 'sample' ? 'Example verification report opened.' : `${next.claims.length} candidate claims extracted. Ready for source review.`)
   }
   function recordReview(action: 'approved' | 'supported' | 'flagged' | 'note' | 'reset', note = '') {
+    if (!selected) return
     const before = currentReview ?? { decision: null, notes: [], history: [] }
     const at = new Date().toISOString()
     const id = crypto.randomUUID()
@@ -135,26 +148,31 @@ function App() {
           </div>
         </div>
         <div className="document-bar"><div className="document-bar-inner shell-width"><div className="current-document"><span className="file-tile"><FileText size={22} strokeWidth={1.6} /></span><div><span className="eyebrow">CURRENT DOCUMENT</span><p title={report.filename}>{report.filename}</p></div></div>
-          <nav className="workflow" aria-label="Verification workflow">{steps.map((step, i) => <div className="workflow-item" key={step}>{i > 0 && <span className="step-connector" />}<button className={`workflow-step ${i === 4 ? 'current' : ''}`} onClick={() => { setWorkflowStep(i); setDialog('workflow') }} aria-label={`${step}: view stage details`} aria-current={i === 4 ? 'step' : undefined}><span className="step-number">{i === 4 ? '5' : report.kind === 'upload' && i > 1 ? i + 1 : <Check size={11} strokeWidth={2.6} />}</span><span>{step}</span></button></div>)}</nav>
+          <nav className="workflow" aria-label="Verification workflow">{steps.map((step, i) => {
+            const illustrative = report.kind === 'sample' && (i === 2 || i === 3)
+            const complete = report.kind === 'sample' ? i < 2 : i < workflowStage
+            return <div className="workflow-item" key={step}>{i > 0 && <span className="step-connector" />}<button className={`workflow-step ${i === workflowStage ? 'current' : ''} ${illustrative ? 'illustrative' : ''}`} onClick={() => { setWorkflowStep(i); setDialog('workflow') }} aria-label={`${step}: view stage details`} aria-current={i === workflowStage ? 'step' : undefined}><span className="step-number">{complete ? <Check size={11} strokeWidth={2.6} /> : illustrative ? 'i' : i + 1}</span><span>{step}</span></button></div>
+          })}</nav>
         </div></div>
       </header>
 
       <main className="main-content shell-width">
-        <section className="overview" aria-labelledby="overview-title"><div className="overview-heading"><div><div className="section-kicker"><span />RESEARCH WORKSPACE</div><h1 id="overview-title">Verification overview</h1><p>A clear view of your paper’s claims and the evidence behind them.</p></div><span className={`completion-chip ${report.kind === 'upload' ? 'pending' : ''}`}><span className="status-dot" />{report.kind === 'sample' ? 'Analysis complete' : 'Ready for review'}</span></div>
-          <div className="metrics-grid"><MetricCard theme="indigo" icon={Layers3} title="Total claims extracted" value={report.claims.length} hint="claims" graph={0} onClick={() => { setQuery(''); setFilter('all'); setReaderTab('index'); setMobilePane('document') }} /><MetricCard theme="green" icon={CircleCheck} title="Supported claims" value={counts.supported} hint={`${counts.percentages[0]}%`} graph={1} onClick={() => changeFilter('supported')} /><MetricCard theme="amber" icon={ScanLine} title="Needs review" value={counts.review} hint={`${counts.percentages[1]}%`} graph={2} onClick={() => changeFilter('needs-review')} /><MetricCard theme="rose" icon={Flag} title="Flagged claims" value={counts.flagged} hint={`${counts.percentages[2]}%`} graph={3} onClick={() => changeFilter('flagged')} /></div>
+        <section className="overview" aria-labelledby="overview-title"><div className="overview-heading"><div><div className="section-kicker"><span />RESEARCH WORKSPACE</div><h1 id="overview-title">Verification overview</h1><p>Review extracted claims, original passages, and human decisions in one workspace.</p></div><span className={`completion-chip ${workspaceStateClass}`}><span className="status-dot" />{workspaceLabel}</span></div>
+          {report.kind === 'sample' ? <div className="report-notice" role="note"><Info size={15} /><p><strong>Illustrative sample data.</strong> Example citations, evidence scores, and assessment labels are demonstration content, not independently verified in this session. Uploaded claims stay unverified until a reviewer supplies source evidence.</p></div> : <div className="report-notice" role="note"><Info size={15} /><p><strong>Local extraction only.</strong> No source search or independent verification has happened. Attach an original passage and record a human decision to review each candidate claim.</p></div>}
+          <div className="metrics-grid"><MetricCard theme="indigo" icon={Layers3} title="Total claims extracted" value={report.claims.length} hint="claims" onClick={() => { setQuery(''); setFilter('all'); setReaderTab('index'); setMobilePane('document') }} /><MetricCard theme="green" icon={CircleCheck} title="Supported claims" value={counts.supported} hint={`${counts.percentages[0]}%`} onClick={() => changeFilter('supported')} /><MetricCard theme="amber" icon={ScanLine} title="Needs review" value={counts.review} hint={`${counts.percentages[1]}%`} onClick={() => changeFilter('needs-review')} /><MetricCard theme="rose" icon={Flag} title="Flagged claims" value={counts.flagged} hint={`${counts.percentages[2]}%`} onClick={() => changeFilter('flagged')} /></div>
         </section>
-        <section className="filter-bar" aria-label="Filter and search claims"><div className="filter-pills"><SlidersHorizontal className="filter-symbol" size={16} />{activeFilters.map(f => <button key={f} onClick={() => changeFilter(f)} aria-pressed={filter === f} className={`filter-pill ${filter === f ? 'active' : ''} ${f}`}>{f !== 'all' && <i className={`dot ${f}`} />}{f === 'all' ? 'All claims' : statusLabels[f]}{f === 'all' && <span className="filter-count">{report.claims.length}</span>}</button>)}</div><div className="search-box"><Search size={15} /><input ref={searchRef} value={query} onChange={e => search(e.target.value)} placeholder="Search claims..." aria-label="Search claims" />{query ? <button className="clear-search" aria-label="Clear search" onClick={() => search('')}><X size={13} /></button> : <kbd>⌘ K</kbd>}</div></section>
-        <div className="mobile-workspace-tabs"><button className={mobilePane === 'document' ? 'active' : ''} onClick={() => setMobilePane('document')}><BookOpen size={15} />Document</button><button className={mobilePane === 'evidence' ? 'active' : ''} onClick={() => setMobilePane('evidence')}><ScanLine size={15} />Evidence inspector</button></div>
-        <section className={`workspace mobile-${mobilePane}`} aria-label="Claim verification workspace"><div className="reader-column">{!expanded && reader}</div><div className="inspector-column">{visibleClaims.length ? <EvidenceInspector key={`${report.id}-${selected.id}`} claim={selected} total={report.claims.length} review={currentReview} onNote={() => setDialog('note')} onApprove={() => recordReview('approved')} onOverride={() => setDialog('override')} onFlag={() => recordReview('flagged')} onReset={() => recordReview('reset')} onCompare={() => setDialog('compare')} onSource={() => setDialog('source')} onNavigate={direction => { const index = visibleClaims.findIndex(c => c.id === selected.id); selectClaim(visibleClaims[(index + direction + visibleClaims.length) % visibleClaims.length], false) }} canNavigate={visibleClaims.length > 1} /> : <section className="panel"><div className="panel-header"><div className="panel-title"><ScanLine size={17} /><h2>Evidence inspector</h2></div></div><div className="empty-state"><span><BookOpen size={25} /></span><h4>No claim to inspect</h4><p>Change your filters or search to explore matching evidence.</p></div></section>}</div></section>
+        <section className="filter-bar" aria-label="Filter and search claims"><div className="filter-pills"><SlidersHorizontal className="filter-symbol" size={16} />{activeFilters.map(f => <button key={f} onClick={() => changeFilter(f)} aria-pressed={filter === f} className={`filter-pill ${filter === f ? 'active' : ''} ${f}`}>{f !== 'all' && <i className={`dot ${f}`} />}{f === 'all' ? 'All claims' : statusLabels[f]}{f === 'all' && <span className="filter-count">{report.claims.length}</span>}</button>)}</div><div className="search-box"><Search size={15} /><input ref={searchRef} value={query} onChange={e => search(e.target.value)} placeholder="Search claims or sources" aria-label="Search claims" />{query ? <button className="clear-search" aria-label="Clear search" onClick={() => search('')}><X size={13} /></button> : <kbd>Ctrl / ⌘ K</kbd>}</div></section>
+        <div className="mobile-workspace-tabs" role="tablist" aria-label="Workspace panel"><button role="tab" aria-selected={mobilePane === 'document'} className={mobilePane === 'document' ? 'active' : ''} onClick={() => setMobilePane('document')}><BookOpen size={15} />Document</button><button role="tab" aria-selected={mobilePane === 'evidence'} className={mobilePane === 'evidence' ? 'active' : ''} onClick={() => setMobilePane('evidence')}><ScanLine size={15} />Evidence inspector</button></div>
+        <section className={`workspace mobile-${mobilePane}`} aria-label="Claim verification workspace"><div className="reader-column">{!expanded && reader}</div><div className="inspector-column">{visibleClaims.length && selected ? <EvidenceInspector key={`${report.id}-${selected.id}`} claim={selected} reportKind={report.kind} locationLabel={report.locationLabel} total={report.claims.length} review={currentReview} onNote={() => setDialog('note')} onApprove={() => recordReview('approved')} onOverride={() => setDialog('override')} onFlag={() => recordReview('flagged')} onReset={() => recordReview('reset')} onCompare={() => setDialog('compare')} onSource={() => setDialog('source')} onNavigate={direction => { const index = visibleClaims.findIndex(c => c.id === selected.id); selectClaim(visibleClaims[(index + direction + visibleClaims.length) % visibleClaims.length], false) }} canNavigate={visibleClaims.length > 1} /> : <section className="panel"><div className="panel-header"><div className="panel-title"><ScanLine size={17} /><h2>Evidence inspector</h2></div></div><div className="empty-state"><span><BookOpen size={25} /></span><h4>No claim to inspect</h4><p>{report.claims.length ? 'Change your filters or search to explore matching evidence.' : 'Upload a paper to extract candidate claims for review.'}</p></div></section>}</div></section>
         <footer className="app-footer"><span><ShieldCheck size={14} />CiteVerify <i />Evidence-informed, human-reviewed.</span><span><CloudCheck size={14} />{saved ? 'All changes saved locally' : 'Session only · browser storage unavailable'}</span></footer>
       </main>
 
       {expanded && <Modal className="expanded-reader-modal" title="Expanded document reader" onClose={() => setExpanded(false)} hideHeader>{reader}</Modal>}
       {dialog === 'upload' && <UploadDialog onClose={closeDialog} onLoad={replaceReport} onExample={() => replaceReport(createExampleReport())} />}
-      {dialog === 'note' && <NoteDialog claim={selected} onClose={closeDialog} onSave={text => recordReview('note', text)} />}
-      {dialog === 'override' && <OverrideDialog claim={selected} onClose={closeDialog} onConfirm={text => recordReview('supported', text)} />}
-      {dialog === 'compare' && <CompareDialog claim={selected} source={currentReview?.source ?? selected.source} onClose={closeDialog} />}
-      {dialog === 'source' && <SourceDialog claim={selected} source={currentReview?.source ?? selected.source} onClose={closeDialog} onSave={source => { const before = reviews[selected.id] ?? { decision: null, notes: [], history: [] }; setReviews(prev => ({ ...prev, [selected.id]: { ...before, source, history: [{ id: crypto.randomUUID(), at: new Date().toISOString(), author: profile.name, detail: 'Attached a source passage' }, ...before.history] } })); setDialog(null); setToast('Source attached. Review the passages to make a decision.') }} />}
+      {dialog === 'note' && selected && <NoteDialog claim={selected} onClose={closeDialog} onSave={text => recordReview('note', text)} />}
+      {dialog === 'override' && selected && <OverrideDialog claim={selected} onClose={closeDialog} onConfirm={text => recordReview('supported', text)} />}
+      {dialog === 'compare' && selected && <CompareDialog claim={selected} reportKind={report.kind} locationLabel={report.locationLabel} source={currentReview?.source ?? selected.source} onClose={closeDialog} />}
+      {dialog === 'source' && selected && <SourceDialog claim={selected} source={currentReview?.source ?? selected.source} onClose={closeDialog} onSave={source => { const before = reviews[selected.id] ?? { decision: null, notes: [], history: [] }; setReviews(prev => ({ ...prev, [selected.id]: { ...before, source, history: [{ id: crypto.randomUUID(), at: new Date().toISOString(), author: profile.name, detail: 'Attached a source passage' }, ...before.history] } })); setDialog(null); setToast('Source attached. Review the passages to make a decision.') }} />}
       {dialog === 'profile' && <ProfileDialog profile={profile} onClose={closeDialog} onSave={next => { setProfile(next); setDialog(null); setToast('Reviewer profile updated.') }} />}
       {dialog === 'workflow' && <WorkflowDialog step={workflowStep} report={report} onStep={setWorkflowStep} onClose={closeDialog} />}
       {dialog === 'shortcuts' && <Modal title="Keyboard shortcuts" description="Move through your research workspace." icon={Keyboard} onClose={closeDialog}><div className="shortcut-list"><div><span>Search claims</span><kbd>Ctrl / ⌘ + K</kbd></div><div><span>Close a dialog or menu</span><kbd>Esc</kbd></div><div><span>Move between controls</span><kbd>Tab</kbd></div><div><span>Select a focused claim</span><kbd>Enter</kbd></div></div></Modal>}

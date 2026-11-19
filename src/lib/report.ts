@@ -37,6 +37,7 @@ export interface Report {
   filename: string
   authors: string
   kind: 'sample' | 'upload'
+  locationLabel: 'Page' | 'PDF page' | 'Passage group'
   claims: Claim[]
   pages: number
   createdAt: string
@@ -85,7 +86,7 @@ export function createExampleReport(): Report {
     ['Adaptive learning removes all accessibility barriers in university STEM courses [6].', 'unsupported', 95, 5, 'Limits of generalization', 'Absolute claim unsupported', ['The source identifies remaining accessibility barriers and does not report their elimination.']],
     ['The largest benefit of adaptive instruction was observed among the highest-performing students [2].', 'contradictory', 96, 1, 'Conclusions', 'Direction of effect reversed', ['The source identifies lower-prior-knowledge students as the group that benefited.', 'The highest-performing group showed no significant difference from the control.']],
   ]
-  return { id: 'adaptive-stem-example', title: 'Impact of Adaptive Learning Algorithms on STEM Retention', filename: 'Impact of Adaptive Learning Algorithms on STEM Retention.pdf', authors: 'A. Reynolds, M. Chen, and S. Patel', kind: 'sample', pages: 6, createdAt: '2026-11-19T10:42:00Z', claims: rows.map((r, i) => i === 3 ? selected : ({ id: i + 1, text: r[0], status: r[1], confidence: r[2], source: sources[r[3]], section: r[4], uncertainty: r[5], reasoning: r[6], page: Math.floor(i / 4) + 1 })) }
+  return { id: 'adaptive-stem-example', title: 'Impact of Adaptive Learning Algorithms on STEM Retention', filename: 'Impact of Adaptive Learning Algorithms on STEM Retention.pdf', authors: 'A. Reynolds, M. Chen, and S. Patel', kind: 'sample', locationLabel: 'Page', pages: 6, createdAt: '2026-11-19T10:42:00Z', claims: rows.map((r, i) => i === 3 ? selected : ({ id: i + 1, text: r[0], status: r[1], confidence: r[2], source: sources[r[3]], section: r[4], uncertainty: r[5], reasoning: r[6], page: Math.floor(i / 4) + 1 })) }
 }
 
 export function effectiveStatus(claim: Claim, review?: Review): Status {
@@ -94,7 +95,7 @@ export function effectiveStatus(claim: Claim, review?: Review): Status {
 }
 export function matchesClaim(claim: Claim, review: Review | undefined, filter: ClaimFilter, query: string) {
   const status = effectiveStatus(claim, review)
-  const matchesStatus = filter === 'all' || filter === status || (filter === 'flagged' && ['unsupported', 'contradictory'].includes(status)) || (filter === 'needs-review' && ['partly', 'outdated', 'unverified'].includes(status))
+  const matchesStatus = filter === 'all' || filter === status || (filter === 'flagged' && (review?.decision === 'flagged' || ['unsupported', 'contradictory'].includes(status))) || (filter === 'needs-review' && review?.decision !== 'flagged' && ['partly', 'outdated', 'unverified'].includes(status))
   const searchable = `${claim.text} ${claim.section} ${(review?.source ?? claim.source)?.title ?? ''} ${String(claim.id).padStart(2, '0')}`
   return matchesStatus && searchable.toLowerCase().includes(query.trim().toLowerCase())
 }
@@ -102,9 +103,11 @@ export const claimNumber = (id: number) => String(id).padStart(2, '0')
 export function getDistribution(claims: Claim[], reviews: Record<number, Review>) {
   const counts: Record<Status, number> = { supported: 0, partly: 0, unsupported: 0, contradictory: 0, outdated: 0, unverified: 0 }
   claims.forEach(c => counts[effectiveStatus(c, reviews[c.id])]++)
-  const review = counts.partly + counts.outdated + counts.unverified
-  const flagged = counts.unsupported + counts.contradictory
-  const raw = [counts.supported, review, flagged].map(n => n * 100 / Math.max(claims.length, 1))
+  if (!claims.length) return { ...counts, review: 0, flagged: 0, percentages: [0, 0, 0] }
+  const reviewerFlagged = claims.filter(c => reviews[c.id]?.decision === 'flagged' && !['unsupported', 'contradictory'].includes(effectiveStatus(c, reviews[c.id]))).length
+  const review = counts.partly + counts.outdated + counts.unverified - reviewerFlagged
+  const flagged = counts.unsupported + counts.contradictory + reviewerFlagged
+  const raw = claims.length ? [counts.supported, review, flagged].map(n => n * 100 / claims.length) : [0, 0, 0]
   const percentages = raw.map(Math.floor)
   const remaining = 100 - percentages.reduce((a, b) => a + b, 0)
   raw.map((n, i) => ({ i, rest: n % 1 })).sort((a, b) => b.rest - a.rest).slice(0, remaining).forEach(o => percentages[o.i]++)
@@ -113,10 +116,61 @@ export function getDistribution(claims: Claim[], reviews: Record<number, Review>
 export function loadWorkspace(): Workspace {
   try {
     const parsed = JSON.parse(localStorage.getItem('citeverify-workspace-v1') ?? 'null')
-    if (parsed?.report?.claims?.length && parsed.report.claims[0].text && parsed.profile?.name && parsed.reviews) return parsed
+    if (isWorkspace(parsed)) {
+      const report = parsed.report
+      const locationLabel = report.locationLabel === 'Page' || report.locationLabel === 'PDF page' || report.locationLabel === 'Passage group'
+        ? report.locationLabel
+        : report.kind === 'sample' ? 'Page' : 'Passage group'
+      return { ...parsed, report: { ...report, locationLabel } }
+    }
   } catch { /* A private browser session can still be used without persistence. */ }
   return { report: createExampleReport(), reviews: {}, profile: { name: 'Alex Morgan', role: 'Academic reviewer' } }
 }
+
+const statuses = new Set<Status>(['supported', 'partly', 'unsupported', 'contradictory', 'outdated', 'unverified'])
+const decisions = new Set(['approved', 'supported', 'flagged', null])
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+function isSource(value: unknown): value is Source {
+  if (!isRecord(value)) return false
+  return typeof value.title === 'string' && typeof value.authors === 'string' && typeof value.year === 'string'
+    && typeof value.section === 'string' && Number.isInteger(value.page) && Number(value.page) > 0
+    && typeof value.excerpt === 'string' && Array.isArray(value.highlights) && value.highlights.every(v => typeof v === 'string')
+    && (value.doi === undefined || typeof value.doi === 'string')
+}
+function isClaim(value: unknown): value is Claim {
+  if (!isRecord(value)) return false
+  return Number.isInteger(value.id) && Number(value.id) > 0 && typeof value.text === 'string'
+    && statuses.has(value.status as Status) && (value.confidence === null || (typeof value.confidence === 'number' && value.confidence >= 0 && value.confidence <= 100))
+    && typeof value.uncertainty === 'string' && typeof value.section === 'string' && Number.isInteger(value.page) && Number(value.page) > 0
+    && Array.isArray(value.reasoning) && value.reasoning.every(v => typeof v === 'string')
+    && (value.source === undefined || isSource(value.source))
+}
+function isReview(value: unknown): value is Review {
+  if (!isRecord(value)) return false
+  const validTime = (time: unknown) => typeof time === 'string' && Number.isFinite(Date.parse(time))
+  const notes = Array.isArray(value.notes) && value.notes.every(n => isRecord(n) && typeof n.id === 'string' && validTime(n.at) && typeof n.author === 'string' && typeof n.text === 'string')
+  const history = Array.isArray(value.history) && value.history.every(h => isRecord(h) && typeof h.id === 'string' && validTime(h.at) && typeof h.author === 'string' && typeof h.detail === 'string' && (h.note === undefined || typeof h.note === 'string'))
+  return decisions.has(value.decision as string | null) && (value.finalStatus === undefined || statuses.has(value.finalStatus as Status))
+    && notes && history && (value.source === undefined || isSource(value.source))
+}
+function isWorkspace(value: unknown): value is Workspace {
+  if (!isRecord(value) || !isRecord(value.report) || !isRecord(value.profile) || !isRecord(value.reviews)) return false
+  const report = value.report
+  const claims = Array.isArray(report.claims) ? report.claims : []
+  const claimsValid = claims.every(isClaim)
+  const uniqueIds = claimsValid && new Set((claims as Claim[]).map(c => c.id)).size === claims.length
+  const claimIds = new Set((claims as Claim[]).map(c => c.id))
+  const reviewsValid = Object.entries(value.reviews).every(([id, review]) => /^\d+$/.test(id) && claimIds.has(Number(id)) && isReview(review))
+  return typeof report.id === 'string' && typeof report.title === 'string' && typeof report.filename === 'string'
+    && typeof report.authors === 'string' && (report.kind === 'sample' || report.kind === 'upload')
+    && Number.isInteger(report.pages) && Number(report.pages) >= 0 && typeof report.createdAt === 'string' && Number.isFinite(Date.parse(report.createdAt))
+    && claimsValid && uniqueIds && reviewsValid && Object.keys(value.reviews).every(id => claims.some(c => String((c as Claim).id) === id))
+    && typeof value.profile.name === 'string' && Boolean(value.profile.name.trim()) && typeof value.profile.role === 'string'
+}
 export function formatTime(iso: string) {
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(iso))
+  const date = new Date(iso)
+  if (!Number.isFinite(date.getTime())) return 'Unknown time'
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
 }

@@ -9,16 +9,8 @@ export function Logo() {
 export function StatusBadge({ status, full = false }: { status: Status; full?: boolean }) {
   return <span className={`status-badge ${status}`}>{status === 'supported' ? <Check size={11} strokeWidth={2.7} /> : status === 'partly' ? <CircleHelp size={11} /> : <i className={`dot ${status}`} />}{statusLabels[status]}{full && status === 'partly' ? ' / Needs review' : ''}</span>
 }
-const graphLines = [
-  'M1 38 C8 39 11 31 18 33 S29 29 35 30 S45 17 53 21 S63 25 70 18 S81 17 86 10 L94 5',
-  'M1 39 C9 37 12 39 18 34 S30 37 37 28 S48 25 54 21 S65 25 72 16 S86 14 94 5',
-  'M1 34 C8 35 10 27 17 27 S25 34 33 29 S44 19 51 22 S62 32 69 23 S80 20 85 16 L94 15',
-  'M1 17 C8 17 10 21 18 19 S30 10 36 14 S46 28 53 23 S62 19 69 25 S81 30 86 26 L94 28',
-]
-export function MetricCard({ theme, icon: Icon, title, value, hint, graph, onClick }: { theme: string; icon: LucideIcon; title: string; value: number; hint: string; graph: number; onClick: () => void }) {
-  const id = useId().replace(/:/g, '')
-  const path = graphLines[graph]
-  return <button className={`metric-card ${theme}`} onClick={onClick} title={`View ${title.toLowerCase()}`}><div className="metric-label"><span className="metric-icon"><Icon size={17} strokeWidth={1.8} /></span><span>{title}</span></div><div className="metric-bottom"><span className="metric-value">{value}</span><span className={graph === 0 ? 'metric-hint' : 'percentage-badge'}>{hint}</span></div><svg className="sparkline" viewBox="0 0 99 49" fill="none" aria-hidden="true"><defs><linearGradient id={id} x1="0" x2="0" y1="0" y2="1"><stop stopColor="currentColor" stopOpacity=".24" /><stop offset="1" stopColor="currentColor" stopOpacity="0" /></linearGradient></defs><path d={`${path} L94 49 H1 Z`} fill={`url(#${id})`} /><path d={path} stroke="currentColor" strokeWidth="2.3" strokeLinejoin="round" strokeLinecap="round" /><circle cx="94" cy={[5, 5, 15, 28][graph]} r="2.9" fill="currentColor" stroke="white" strokeWidth="1.2" /></svg></button>
+export function MetricCard({ theme, icon: Icon, title, value, hint, onClick }: { theme: string; icon: LucideIcon; title: string; value: number; hint: string; onClick: () => void }) {
+  return <button className={`metric-card ${theme}`} onClick={onClick} aria-label={`View ${title.toLowerCase()}: ${value}`} title={`View ${title.toLowerCase()}`}><div className="metric-label"><span className="metric-icon"><Icon size={17} strokeWidth={1.8} /></span><span>{title}</span></div><div className="metric-bottom"><span className="metric-value">{value}</span><span className={title === 'Total claims extracted' ? 'metric-hint' : 'percentage-badge'}>{hint}</span></div></button>
 }
 export function SectionTitle({ letter, title, children }: { letter: string; title: string; children?: ReactNode }) {
   return <div className="inspector-section-heading"><span className="section-letter">{letter}</span><h3>{title}</h3>{children && <span className="section-heading-extra">{children}</span>}</div>
