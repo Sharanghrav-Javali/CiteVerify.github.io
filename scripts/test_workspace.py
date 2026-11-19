@@ -1,0 +1,147 @@
+"""End-to-end checks against a production build, using a short-lived static server."""
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
+from tempfile import TemporaryDirectory
+import json
+from playwright.sync_api import sync_playwright, expect
+
+class QuietHandler(SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+root = Path(__file__).resolve().parents[1]
+server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietHandler, directory=str(root / 'dist')))
+Thread(target=server.serve_forever, daemon=True).start()
+try:
+    with sync_playwright() as p, TemporaryDirectory() as temp:
+        browser = p.chromium.launch(headless=True, args=['--no-sandbox'])
+        page = browser.new_page(viewport={'width': 1440, 'height': 1000}, accept_downloads=True)
+        page.set_default_timeout(5500)
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        url = f'http://127.0.0.1:{server.server_port}'
+        page.goto(url, wait_until='networkidle')
+        expect(page.locator('.metric-value')).to_have_text(['24','16','5','3'])
+        expect(page.locator('.percentage-badge')).to_have_text(['67%','21%','12%'])
+        expect(page.locator('.selected-passage-text')).to_contain_text('by 30%')
+        expect(page.locator('.confidence-heading strong')).to_have_text('68%')
+        print('PASS: requested initial report and selected claim')
+        for selector, number in [('supported',16),('partly',5),('unsupported',2),('contradictory',1),('outdated',0)]:
+            page.locator(f'.filter-pill.{selector}').click()
+            expect(page.locator('.index-item')).to_have_count(number)
+        expect(page.get_by_text('No claim to inspect', exact=True)).to_be_visible()
+        page.get_by_role('button',name='Show all claims',exact=True).click()
+        expect(page.locator('.index-item')).to_have_count(24)
+        page.locator('.metric-card.rose').click()
+        expect(page.locator('.index-item')).to_have_count(3)
+        page.locator('.metric-card.amber').click()
+        expect(page.locator('.index-item')).to_have_count(5)
+        page.locator('.filter-pill.all').click()
+        page.keyboard.press('Control+k')
+        expect(page.get_by_role('textbox',name='Search claims')).to_be_focused()
+        page.get_by_role('textbox',name='Search claims').fill('30%')
+        expect(page.locator('.index-item')).to_have_count(1)
+        page.locator('.index-item').click()
+        expect(page.locator('.confidence-heading strong')).to_have_text('68%')
+        page.get_by_role('button',name='Clear search',exact=True).click()
+        print('PASS: every filter, grouped KPI filters, searchable index, and shortcuts')
+        page.get_by_role('button',name='Side by side',exact=True).click()
+        expect(page.get_by_role('dialog')).to_contain_text('11.4%')
+        expect(page.get_by_role('dialog')).to_contain_text('30%')
+        page.keyboard.press('Escape')
+        page.get_by_role('button',name='Expand document reader',exact=True).click()
+        expect(page.get_by_role('dialog')).to_be_visible()
+        page.get_by_role('button',name='Increase document zoom').click()
+        expect(page.locator('.zoom-controls')).to_contain_text('110%')
+        page.get_by_role('button',name='Next document page').click()
+        expect(page.locator('.paper-page-count')).to_have_text('Page 2 of 6')
+        page.get_by_label('Document page',exact=True).select_option('1')
+        page.keyboard.press('Escape')
+        page.get_by_role('button',name='Extract: view stage details').click()
+        expect(page.get_by_role('dialog')).to_contain_text('Claims extracted')
+        page.locator('.workflow-dialog-tabs button').nth(2).click()
+        expect(page.get_by_role('dialog')).to_contain_text('Original sources matched')
+        page.keyboard.press('Escape')
+        print('PASS: passage comparison, expanded reader, zoom, page controls, workflow detail tabs')
+        page.get_by_role('button',name='Add reviewer note',exact=True).click()
+        page.get_by_label('Reviewer note',exact=True).fill('The pilot sample should not be generalized to all STEM modules.')
+        page.get_by_role('button',name='Save note',exact=True).click()
+        page.get_by_role('button',name='Approve flag',exact=True).click()
+        expect(page.get_by_role('button',name='Flag approved',exact=True)).to_be_disabled()
+        page.locator('.audit-toggle').click()
+        expect(page.locator('.audit-content')).to_contain_text('Approved the verification flag')
+        expect(page.locator('.audit-content')).to_contain_text('The pilot sample should not be generalized')
+        page.get_by_role('button',name='Override as supported',exact=True).click()
+        page.get_by_label('Reason for override').fill('Independent reanalysis supplied by the reviewer.')
+        page.get_by_role('button',name='Confirm override').click()
+        expect(page.locator('.metric-value')).to_have_text(['24','17','4','3'])
+        page.get_by_role('button',name='Confirm support',exact=True).click()
+        expect(page.locator('.metric-value')).to_have_text(['24','17','4','3'])
+        page.reload(wait_until='networkidle')
+        expect(page.locator('.assessment-labels')).to_contain_text('Supported')
+        page.locator('.audit-toggle').click()
+        expect(page.locator('.audit-content')).to_contain_text('Independent reanalysis')
+        page.get_by_role('button',name='Restore original assessment').click()
+        expect(page.locator('.metric-value')).to_have_text(['24','16','5','3'])
+        print('PASS: notes, approval, overrides, decisions, persistent audit, reset')
+        page.get_by_role('button',name='Open reviewer profile').click()
+        page.get_by_role('button',name='Reviewer profile',exact=True).click()
+        page.get_by_label('Display name').fill('Dr. Taylor Lane')
+        page.get_by_role('button',name='Save profile').click()
+        await_name='Dr. Taylor Lane'
+        for fmt in ['JSON','PDF']:
+            page.get_by_role('button',name='Export verification report').click()
+            with page.expect_download() as download:
+                page.get_by_role('button',name='JSON data' if fmt=='JSON' else 'PDF report',exact=False).click()
+            path=Path(temp)/('report.'+fmt.lower())
+            download.value.save_as(path)
+            if fmt=='JSON':
+                data=json.loads(path.read_text()); assert len(data['claims'])==24 and data['reviewer']==await_name
+                assert len(data['claims'][3]['review']['notes'])==2
+            else:
+                assert path.read_bytes().startswith(b'%PDF')
+        print('PASS: reviewer profile, structured JSON download, complete PDF report download')
+        page.get_by_role('button',name='Upload new paper',exact=True).click()
+        page.locator('input[type=file]').set_input_files({'name':'Research brief.txt','mimeType':'text/plain','buffer':b'Students who received personalized feedback completed more practice exercises. Assessment outcomes varied between the two study groups. Additional follow-up is needed to determine long-term changes.'})
+        page.get_by_role('button',name='Open paper',exact=True).click()
+        expect(page.locator('.metric-value')).to_have_text(['3','0','3','0'])
+        expect(page.locator('.assessment-labels')).to_contain_text('Unverified')
+        expect(page.get_by_role('button',name='Override as supported',exact=True)).to_be_disabled()
+        page.get_by_role('button',name='Attach an original source',exact=False).click()
+        page.get_by_label('Paper title').fill('Practice and Feedback: Pilot Study')
+        page.get_by_label('Authors',exact=True).fill('T. Lane')
+        page.get_by_label('Year',exact=True).fill('2025')
+        page.get_by_label('Original source passage').fill('Participants receiving feedback completed a greater number of practice exercises during the observed week.')
+        page.get_by_label('Section',exact=True).fill('3.2')
+        page.get_by_role('button',name='Attach source',exact=True).click()
+        expect(page.locator('.source-card')).to_contain_text('Practice and Feedback')
+        page.get_by_role('button',name='Override as supported',exact=True).click()
+        page.get_by_role('button',name='Confirm override').click()
+        expect(page.locator('.metric-value')).to_have_text(['3','1','2','0'])
+        print('PASS: real text import, local extraction, source attachment, human verification')
+        page.get_by_role('button',name='Upload new paper',exact=True).click()
+        page.locator('input[type=file]').set_input_files(str(Path(temp)/'report.pdf'))
+        page.get_by_role('button',name='Open paper',exact=True).click()
+        expect(page.locator('.current-document p')).to_have_text('report.pdf',timeout=15000)
+        assert int(page.locator('.metric-value').first.inner_text())>1
+        print('PASS: local PDF parsing and real passage extraction')
+        page.get_by_role('button',name='Upload new paper',exact=True).click()
+        page.get_by_role('button',name='Open example report').click()
+        page.set_viewport_size({'width':390,'height':844})
+        page.locator('.selected-passage').click()
+        expect(page.locator('.inspector-panel')).to_be_visible()
+        expect(page.locator('.reader-column')).to_be_hidden()
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.locator('.mobile-workspace-tabs button').first.click()
+        expect(page.locator('.reader-column')).to_be_visible()
+        page.get_by_role('button',name='Upload new paper',exact=True).click()
+        expect(page.get_by_role('dialog')).to_be_visible()
+        page.keyboard.press('Escape')
+        print('PASS: responsive document/evidence navigation and mobile controls')
+        assert not errors, errors
+        print('PASS: no browser runtime errors')
+        browser.close()
+finally:
+    server.shutdown(); server.server_close()
